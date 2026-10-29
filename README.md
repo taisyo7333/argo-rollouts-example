@@ -1,4 +1,4 @@
-# argo-rollout-example
+# argo-rollouts-example
 
 Sample manifests for trying a canary deployment with Argo Rollouts on OpenShift GitOps.
 
