@@ -1,0 +1,74 @@
+---
+apiVersion: argoproj.io/v1alpha1
+kind: AnalysisTemplate
+metadata:
+  name: canary-success-rate
+spec:
+  args:
+  - name: api-token
+    valueFrom:
+      secretKeyRef:
+        name: rollouts-analysis-metrics-token
+        key: token
+  metrics:
+  - name: canary-error-rate
+    initialDelay: 60s
+    interval: 30s
+    count: 3
+    successCondition: result[0] < 0.05
+    failureLimit: 1
+    consecutiveErrorLimit: 3
+    provider:
+      prometheus:
+        address: https://thanos-querier.openshift-monitoring.svc.cluster.local:9091
+        timeout: 40
+        insecure: true
+        headers:
+        - key: Authorization
+          value: "Bearer {{args.api-token}}"
+        query: |
+          (
+            sum(rate(haproxy_backend_http_responses_total{exported_namespace="rollouts-analysis",route="rollouts-demo",backend="be_secure:rollouts-analysis:rollouts-demo-canary",code="5xx"}[2m]))
+            or vector(0)
+          )
+          /
+          sum(rate(haproxy_backend_http_responses_total{exported_namespace="rollouts-analysis",route="rollouts-demo",backend="be_secure:rollouts-analysis:rollouts-demo-canary"}[2m]))
+  - name: generate-traffic
+    provider:
+      job:
+        spec:
+          backoffLimit: 1
+          template:
+            spec:
+              serviceAccountName: rollouts-analysis-metrics
+              restartPolicy: Never
+              containers:
+              - name: curl
+                image: curlimages/curl:8.11.1
+                command: [sh, -c]
+                args:
+                - |
+                  set -eu
+                  token="$(cat /var/run/secrets/kubernetes.io/serviceaccount/token)"
+                  ca="/var/run/secrets/kubernetes.io/serviceaccount/ca.crt"
+                  json="$(curl -fsS --retry 5 --retry-delay 2 --retry-all-errors --cacert "$ca" \
+                    -H "Authorization: Bearer ${token}" \
+                    "https://kubernetes.default.svc/apis/route.openshift.io/v1/namespaces/rollouts-analysis/routes/rollouts-demo")"
+                  host="$(printf '%s' "$json" | tr '{},' '\n' | sed -n 's/^ *"host" *: *"\([^"][^"]*\)".*/\1/p' | head -1)"
+                  if [ -z "$host" ]; then
+                    echo "admitted route host not found" >&2
+                    exit 1
+                  fi
+                  echo "sending traffic to https://${host}/color"
+                  end="$(( $(date +%s) + 150 ))"
+                  while [ "$(date +%s)" -lt "$end" ]; do
+                    curl -sk -o /dev/null --max-time 5 "https://${host}/color" || true
+                    sleep 1
+                  done
+                securityContext:
+                  runAsNonRoot: true
+                  allowPrivilegeEscalation: false
+                  capabilities:
+                    drop: ["ALL"]
+                  seccompProfile:
+                    type: RuntimeDefault
