@@ -1,18 +1,40 @@
 # argo-rollouts-example
 
-Sample manifests for trying a canary deployment with Argo Rollouts on OpenShift GitOps.
+Sample manifests for canary deployments with Argo Rollouts on OpenShift GitOps.
 
-The Rollout runs `argoproj/rollouts-demo:blue` with 5 replicas and shifts traffic to a new version in steps: 20% → 40% → 60% → 80%. 
-The 20% step pauses until it is resumed manually. Later steps continue automatically after 45 seconds, 20 seconds, and 10 seconds.
+## Summary
+
+This repository has two examples. Both run `argoproj/rollouts-demo` with 5 replicas and start from the `blue` tag. They use the same Rollout name, `rollouts-demo`, in different namespaces. A single RolloutManager in `openshift-gitops` watches both.
+
+### Manual pause (`rollouts-demo`)
+
+`manifests/overlays/demo` deploys a canary that advances on pauses. `basic-application.yaml` syncs it into the `rollouts-demo` namespace. Sync is manual.
+
+You can confirm:
+
+- `setWeight` changes how many pods run the new version. Every request still goes to one Service, and the Route stays at weight 100 on that Service.
+- The 20% step waits until you run `promote`. The later steps continue on their own after 45 seconds (40%), 20 seconds (60%), and 10 seconds (80%).
+- `promote` resumes a paused step. `abort` stops the update and keeps the previous ReplicaSet.
+
+### Metric analysis (`rollouts-analysis`)
+
+`manifests/analysis` deploys a canary that promotes or aborts from OpenShift Router metrics. `analysis-application.yaml` syncs it into the `rollouts-analysis` namespace. Sync is automated.
+
+You can confirm:
+
+- The Rollout has a stable Service and a canary Service. The OpenShift Route plugin writes those weights onto the Route, so the router sends part of the traffic to the canary. At the 20% step the Route is stable 80 / canary 20.
+- AnalysisTemplate `canary-success-rate` reads the canary 5xx ratio from `haproxy_server_http_responses_total` (`exported_service="rollouts-demo-canary"`). A ratio under 5% for 3 samples continues the rollout to 100%. A ratio at or above 5% aborts it, and the Route returns to the stable Service at weight 100.
+- `yellow` stays near a 0% 5xx ratio and completes. `bad-yellow` returns HTTP 500 for most requests and aborts.
 
 ## Layout
-### Tree
 
 ```
 .
 ├── analysis-application.yaml
-├── demo-application.yaml
+├── basic-application.yaml
 ├── rollout-manager-application.yaml
+├── docs
+│   └── gitops-management-resources.md
 ├── manifests
 │   ├── analysis
 │   │   ├── analysis-template.yaml
@@ -38,63 +60,22 @@ The 20% step pauses until it is resumed manually. Later steps continue automatic
 └── README.md
 ```
 
-
-Kustomize base manifests live under `manifests/base`. The `demo` overlay sets the namespace to `rollouts-demo` and adds that Namespace. `manifests/analysis` is a separate demo that promotes or aborts a canary from router metrics. `manifests/rollout-manager` installs the Argo Rollouts controller in `openshift-gitops`.
+`manifests/base` is the manual-pause Rollout, Service, and Route. The `demo` overlay sets the namespace to `rollouts-demo`. `manifests/analysis` is self-contained and does not use that base. `manifests/rollout-manager` installs the controller.
 
 | File | Description |
 | --- | --- |
-| `manifests/base/rollout.yaml` | Rollout with a canary strategy |
-| `manifests/base/service.yaml` | Service for the Rollout (port 80 → 8080) |
-| `manifests/base/route.yaml` | OpenShift Route with edge TLS termination |
+| `manifests/base/rollout.yaml` | Canary Rollout with manual and timed pauses |
+| `manifests/base/service.yaml` | Single Service for the manual-pause Rollout (port 80 → 8080) |
+| `manifests/base/route.yaml` | Route to that Service, edge TLS, weight 100 |
 | `manifests/overlays/demo/` | Overlay for the `rollouts-demo` namespace |
-| `demo-application.yaml` | Argo CD Application that syncs the demo overlay |
-| `manifests/analysis/` | Canary Rollout that continues or aborts from Prometheus metrics |
-| `analysis-application.yaml` | Argo CD Application that syncs the analysis demo with automated sync |
-| `manifests/rollout-manager/` | RolloutManager with an empty spec |
+| `basic-application.yaml` | Argo CD Application for the manual-pause example |
+| `manifests/analysis/` | Canary Rollout, stable and canary Services, Route, and AnalysisTemplate |
+| `analysis-application.yaml` | Argo CD Application for the metric analysis example, with automated sync |
+| `manifests/rollout-manager/` | RolloutManager `argo-rollout` with `spec.ha.enabled: true` |
 | `rollout-manager-application.yaml` | Argo CD Application that syncs the RolloutManager into `openshift-gitops` |
+| `docs/gitops-management-resources.md` | CPU and memory usage, requests, and limits for the GitOps management pods |
 
-## Deploy with OpenShift GitOps
-
-`demo-application.yaml` creates an Application named `rollouts-demo` in the `openshift-gitops` namespace. It syncs `manifests/overlays/demo` from this repository into the `rollouts-demo` namespace.
-It creates OpenShift objects in `rollouts-demo` namespace.
-
-```bash
-oc apply -f demo-application.yaml
-```
-
-
-## ArgoCD Rollouts
-```sh
- oc argo rollouts list rollouts -n {namecpaces}
-```
-
-```sh
-oc argo rollouts get rollout rollouts-demo -n {namecpaces} --watch
-```
-
-### promote
-```sh
-oc argo rollouts set image rollouts-demo rollouts-demo=argoproj/rollouts-demo:yellow
-oc argo rollouts promote rollouts-demo
-```
-
-### abort
-
-```sh
-oc argo rollouts set image rollouts-demo rollouts-demo=argoproj/rollouts-demo:red
-oc argo rollouts abort rollouts-demo
-oc argo rollouts set image rollouts-demo rollouts-demo=argoproj/rollouts-demo:yellow
-```
-
-## Metric analysis demo
-
-This demo is separate from the manual pause demo. It runs in the `rollouts-analysis` namespace. The canary step at 20% runs `canary-success-rate`. That AnalysisTemplate reads the OpenShift Router 5xx ratio for the canary backend from Thanos Querier. The rollout moves to 100% when the ratio stays under 5%, and aborts when it does not.
-
-`argoproj/rollouts-demo` does not publish its own Prometheus metrics. The query uses `haproxy_server_http_responses_total` for `exported_service="rollouts-demo-canary"`. The `yellow` tag returns almost all HTTP 200. The `bad-yellow` tag returns HTTP 500 for most requests.
-
-The Route in `manifests/analysis/route.yaml` is required. Its primary backend is `rollouts-demo-stable` and its alternate backend is `rollouts-demo-canary`. The analysis Rollout selects the OpenShift Route plugin in `trafficRouting.plugins`, and that plugin updates the Route weights.
-
-### Prerequisites
+## Prerequisites
 
 The Red Hat OpenShift GitOps Operator is already installed. This repository does not install the Operator.
 
@@ -104,19 +85,58 @@ The Red Hat OpenShift GitOps Operator is already installed. This repository does
 oc apply -f rollout-manager-application.yaml
 ```
 
-The RolloutManager is named `argo-rollout` and its `spec` is empty. It installs the cluster-scoped controller, which watches both `rollouts-demo` and `rollouts-analysis`. It does not declare a traffic or metric plugin. Prometheus analysis uses the built-in provider.
+The RolloutManager is named `argo-rollout`. `spec.ha.enabled: true` runs the controller as two active/passive replicas. It does not declare a traffic or metric plugin. The Operator loads the OpenShift Route plugin into `argo-rollouts-config`. The analysis Rollout selects that plugin in `trafficRouting.plugins`. Prometheus analysis uses the built-in provider.
 
 If a RolloutManager with a different name already exists, match `metadata.name` to that object before applying. A second name creates a second controller.
 
-After sync, `trafficRouterPlugins` in `argo-rollouts-config` lists the OpenShift Route plugin that the Operator installs, `argoproj-labs/openshift` at `file:/plugins/rollouts-trafficrouter-openshift/openshift-route-plugin`:
+After sync, `trafficRouterPlugins` lists `argoproj-labs/openshift` at `file:/plugins/rollouts-trafficrouter-openshift/openshift-route-plugin`:
 
 ```bash
 oc get cm argo-rollouts-config -n openshift-gitops -o yaml
 ```
 
+## Manual pause example
+
+`basic-application.yaml` creates an Application named `rollouts-demo` in `openshift-gitops`. It syncs `manifests/overlays/demo` into the `rollouts-demo` namespace. CreateNamespace is enabled. Sync is not automated.
+
+```bash
+oc apply -f basic-application.yaml
+```
+
+Watch the rollout. Both examples use the name `rollouts-demo`, so pass the namespace.
+
+```sh
+oc argo rollouts get rollout rollouts-demo -n rollouts-demo --watch
+```
+
+### Promote
+
+The first step stays paused at 20% until you promote it.
+
+```sh
+oc argo rollouts set image rollouts-demo rollouts-demo=argoproj/rollouts-demo:yellow -n rollouts-demo
+oc argo rollouts promote rollouts-demo -n rollouts-demo
+```
+
+### Abort
+
+```sh
+oc argo rollouts set image rollouts-demo rollouts-demo=argoproj/rollouts-demo:red -n rollouts-demo
+oc argo rollouts abort rollouts-demo -n rollouts-demo
+oc argo rollouts set image rollouts-demo rollouts-demo=argoproj/rollouts-demo:yellow -n rollouts-demo
+```
+
+## Metric analysis example
+
+The Route in `manifests/analysis/route.yaml` is required. Its primary backend is `rollouts-demo-stable` and its alternate backend is `rollouts-demo-canary`. Cookies are disabled and the balance is `roundrobin`, so successive requests can land on either backend while the canary weight is above 0.
+
+`argoproj/rollouts-demo` does not publish its own Prometheus metrics. The AnalysisTemplate queries Thanos Querier on port 9091. A Job in the same analysis run requests `https://<route-host>/color` for about 150 seconds so the router series is not empty. The Prometheus check starts after 60 seconds and runs 3 times, 30 seconds apart. `successCondition` is `result[0] < 0.05`, and `failureLimit` is 1.
+
+The manifests include a ServiceAccount token Secret and a `cluster-monitoring-view` binding for that query.
+
 ### Deploy
 
-`analysis-application.yaml` creates an Application named `rollouts-analysis` in the `openshift-gitops` namespace. Automated sync is enabled, so Argo CD syncs `manifests/analysis` into `rollouts-analysis` after this command:
+`analysis-application.yaml` creates an Application named `rollouts-analysis` in `openshift-gitops`. Automated sync is enabled.
 
 ```bash
 oc apply -f analysis-application.yaml
@@ -128,8 +148,6 @@ To apply the same manifests without Argo CD:
 oc apply -k manifests/analysis
 ```
 
-The analysis manifests include a ServiceAccount token secret and a `cluster-monitoring-view` binding so the AnalysisTemplate can query Thanos Querier. The traffic job uses that ServiceAccount to read the Route host, then requests `https://<route-host>/color` for about 150 seconds. The Prometheus check starts after 60 seconds and runs 3 times, 30 seconds apart.
-
 ### Pass
 
 ```sh
@@ -137,7 +155,7 @@ oc argo rollouts set image rollouts-demo rollouts-demo=argoproj/rollouts-demo:ye
 oc argo rollouts get rollout rollouts-demo -n rollouts-analysis --watch
 ```
 
-`yellow` should pass the analysis and continue to 100%.
+`yellow` passes the analysis and the rollout continues to weight 100.
 
 ### Abort from metrics
 
@@ -146,13 +164,14 @@ oc argo rollouts set image rollouts-demo rollouts-demo=argoproj/rollouts-demo:ba
 oc argo rollouts get rollout rollouts-demo -n rollouts-analysis --watch
 ```
 
-`bad-yellow` should fail the analysis and abort back to the stable ReplicaSet.
+`bad-yellow` fails the analysis. The rollout aborts and the Route returns to the stable Service. The phase stays `Degraded` until you set the image back to the stable tag.
 
-## Tested Environments
+## Tested environments
 
 * OpenShift GitOps 1.22
 * OpenShift 4.22
 
-## Reference URLs
+## Reference
 
-https://docs.redhat.com/en/documentation/red_hat_openshift_gitops/1.22/html/argo_rollouts/getting-started-with-argo-rollouts
+* [Getting started with Argo Rollouts (OpenShift GitOps 1.22)](https://docs.redhat.com/en/documentation/red_hat_openshift_gitops/1.22/html/argo_rollouts/getting-started-with-argo-rollouts)
+* [Routing traffic by using Argo Rollouts (OpenShift GitOps 1.22)](https://docs.redhat.com/en/documentation/red_hat_openshift_gitops/1.22/html-single/argo_rollouts/index#routing-traffic-by-using-argo-rollouts)
