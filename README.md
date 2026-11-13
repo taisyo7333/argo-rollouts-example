@@ -90,7 +90,7 @@ oc argo rollouts set image rollouts-demo rollouts-demo=argoproj/rollouts-demo:ye
 
 This demo is separate from the manual pause demo. It runs in the `rollouts-analysis` namespace. The canary step at 20% runs `canary-success-rate`. That AnalysisTemplate reads the OpenShift Router 5xx ratio for the canary backend from Thanos Querier. The rollout moves to 100% when the ratio stays under 5%, and aborts when it does not.
 
-`argoproj/rollouts-demo` does not publish its own Prometheus metrics. The query uses `haproxy_backend_http_responses_total` for backend `be_secure:rollouts-analysis:rollouts-demo-canary`. The `yellow` tag returns almost all HTTP 200. The `bad-yellow` tag returns HTTP 500 for most requests.
+`argoproj/rollouts-demo` does not publish its own Prometheus metrics. The query uses `haproxy_server_http_responses_total` for `exported_service="rollouts-demo-canary"`. The `yellow` tag returns almost all HTTP 200. The `bad-yellow` tag returns HTTP 500 for most requests.
 
 The Route in `manifests/analysis/route.yaml` is required. Its primary backend is `rollouts-demo-stable` and its alternate backend is `rollouts-demo-canary`. The analysis Rollout selects the OpenShift Route plugin in `trafficRouting.plugins`, and that plugin updates the Route weights.
 

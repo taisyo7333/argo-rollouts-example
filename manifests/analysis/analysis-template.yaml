@@ -28,11 +28,11 @@ spec:
           value: "Bearer {{args.api-token}}"
         query: |
           (
-            sum(rate(haproxy_backend_http_responses_total{exported_namespace="rollouts-analysis",route="rollouts-demo",backend="be_secure:rollouts-analysis:rollouts-demo-canary",code="5xx"}[2m]))
+            sum(rate(haproxy_server_http_responses_total{exported_namespace="rollouts-analysis",route="rollouts-demo",exported_service="rollouts-demo-canary",code="5xx"}[2m]))
             or vector(0)
           )
           /
-          sum(rate(haproxy_backend_http_responses_total{exported_namespace="rollouts-analysis",route="rollouts-demo",backend="be_secure:rollouts-analysis:rollouts-demo-canary"}[2m]))
+          sum(rate(haproxy_server_http_responses_total{exported_namespace="rollouts-analysis",route="rollouts-demo",exported_service="rollouts-demo-canary"}[2m]))
   - name: generate-traffic
     provider:
       job:
