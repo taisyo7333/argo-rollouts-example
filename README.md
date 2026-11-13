@@ -12,6 +12,7 @@ The 20% step pauses until it is resumed manually. Later steps continue automatic
 .
 ├── analysis-application.yaml
 ├── demo-application.yaml
+├── rollout-manager-application.yaml
 ├── manifests
 │   ├── analysis
 │   │   ├── analysis-template.yaml
@@ -27,15 +28,18 @@ The 20% step pauses until it is resumed manually. Later steps continue automatic
 │   │   ├── rollout.yaml
 │   │   ├── route.yaml
 │   │   └── service.yaml
-│   └── overlays
-│       └── demo
-│           ├── kustomization.yaml
-│           └── namespace.yaml
+│   ├── overlays
+│   │   └── demo
+│   │       ├── kustomization.yaml
+│   │       └── namespace.yaml
+│   └── rollout-manager
+│       ├── kustomization.yaml
+│       └── rollout-manager.yaml
 └── README.md
 ```
 
 
-Kustomize base manifests live under `manifests/base`. The `demo` overlay sets the namespace to `rollouts-demo` and adds that Namespace. `manifests/analysis` is a separate demo that promotes or aborts a canary from router metrics.
+Kustomize base manifests live under `manifests/base`. The `demo` overlay sets the namespace to `rollouts-demo` and adds that Namespace. `manifests/analysis` is a separate demo that promotes or aborts a canary from router metrics. `manifests/rollout-manager` installs the Argo Rollouts controller in `openshift-gitops`.
 
 | File | Description |
 | --- | --- |
@@ -46,6 +50,8 @@ Kustomize base manifests live under `manifests/base`. The `demo` overlay sets th
 | `demo-application.yaml` | Argo CD Application that syncs the demo overlay |
 | `manifests/analysis/` | Canary Rollout that continues or aborts from Prometheus metrics |
 | `analysis-application.yaml` | Argo CD Application that syncs the analysis demo with automated sync |
+| `manifests/rollout-manager/` | RolloutManager with the OpenShift Route traffic plugin |
+| `rollout-manager-application.yaml` | Argo CD Application that syncs the RolloutManager into `openshift-gitops` |
 
 ## Deploy with OpenShift GitOps
 
@@ -90,8 +96,23 @@ The Route in `manifests/analysis/route.yaml` is required. RolloutManager install
 
 ### Prerequisites
 
-* A RolloutManager is already installed, as for the pause demo.
-* `argo-rollouts-config` lists the OpenShift Route plugin `argoproj-labs/openshift` at `file:/plugins/rollouts-trafficrouter-openshift/openshift-route-plugin`. When that entry is missing, add it to the RolloutManager.
+The Red Hat OpenShift GitOps Operator is already installed. This repository does not install the Operator.
+
+`rollout-manager-application.yaml` creates an Application named `rollout-manager` in `openshift-gitops`. Automated sync is enabled, so Argo CD syncs `manifests/rollout-manager` into `openshift-gitops`:
+
+```bash
+oc apply -f rollout-manager-application.yaml
+```
+
+The RolloutManager is named `argo-rollouts`. It loads the OpenShift Route plugin so the analysis Rollout can change Route weights. It does not add a metric plugin. Prometheus analysis uses the built-in provider. The controller stays cluster-scoped and watches both `rollouts-demo` and `rollouts-analysis`.
+
+If a RolloutManager with a different name already exists, match `metadata.name` to that object before applying. A second name creates a second controller.
+
+After sync, `trafficRouterPlugins` in `argo-rollouts-config` lists `argoproj-labs/openshift` at `file:/plugins/rollouts-trafficrouter-openshift/openshift-route-plugin`:
+
+```bash
+oc get cm argo-rollouts-config -n openshift-gitops -o yaml
+```
 
 ### Deploy
 

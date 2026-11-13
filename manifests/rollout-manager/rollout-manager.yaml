@@ -1,0 +1,11 @@
+---
+apiVersion: argoproj.io/v1alpha1
+kind: RolloutManager
+metadata:
+  name: argo-rollouts
+  namespace: openshift-gitops
+spec:
+  plugins:
+    trafficManagement:
+      - name: argoproj-labs/openshift
+        location: file:/plugins/rollouts-trafficrouter-openshift/openshift-route-plugin
