@@ -1,0 +1,48 @@
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: rollouts-analysis-metrics
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: rollouts-analysis-metrics-token
+  annotations:
+    kubernetes.io/service-account.name: rollouts-analysis-metrics
+type: kubernetes.io/service-account-token
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: rollouts-analysis-metrics
+rules:
+- apiGroups: ["route.openshift.io"]
+  resources: ["routes"]
+  verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: rollouts-analysis-metrics
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: rollouts-analysis-metrics
+subjects:
+- kind: ServiceAccount
+  name: rollouts-analysis-metrics
+  namespace: rollouts-analysis
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: rollouts-analysis-metrics
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: cluster-monitoring-view
+subjects:
+- kind: ServiceAccount
+  name: rollouts-analysis-metrics
+  namespace: rollouts-analysis
