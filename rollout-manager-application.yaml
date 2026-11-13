@@ -11,7 +11,7 @@ spec:
   source:
     path: manifests/rollout-manager
     repoURL: https://github.com/taisyo7333/argo-rollouts-example
-    targetRevision: analysis
+    targetRevision: HEAD
   sources: []
   project: default
   syncPolicy:
